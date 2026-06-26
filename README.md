@@ -16,3 +16,5 @@ https://github.com/user-attachments/assets/bb953479-adbf-4075-be86-0ce1f3b234f4
 If you enjoy using this script, you can support me:
 
 [![Support on Boosty](https://img.shields.io/badge/Support-Boosty-F15F2C?style=for-the-badge&logo=boosty&logoColor=white)](https://boosty.to/enoxyum/donate)
+[![Support on DonationAlerts](https://img.shields.io/badge/Donate-DonationAlerts-FD6114?style=for-the-badge&logo=donationalerts&logoColor=white)](https://dalink.to/enoxyum)
+
