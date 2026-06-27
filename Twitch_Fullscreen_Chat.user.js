@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Fullscreen Chat
 // @namespace    http://tampermonkey.net/
-// @version      1.5.5
+// @version      1.7.0
 // @description  FullScreen Twitch Chat. Functional transparent movable resizable etc.
 // @author       EnoxyuM
 // @match        https://www.twitch.tv/*
@@ -12,11 +12,83 @@
 (function() {
     'use strict';
 
+    // === ОБХОД БЛОКИРОВКИ ЧАТА "ОКНО ЗАКРЫТО ДРУГИМ ЭЛЕМЕНТОМ" ===
+
+    // 1. Обход проверки через IntersectionObserver (для фрейма и основного окна)
+    const OriginalIntersectionObserver = window.IntersectionObserver;
+    if (typeof OriginalIntersectionObserver === 'function') {
+        window.IntersectionObserver = class extends OriginalIntersectionObserver {
+            constructor(callback, options) {
+                const modifiedCallback = (entries, observer) => {
+                    const modifiedEntries = entries.map(entry => {
+                        const isInsideChatIframe = window.location.pathname.includes('/chat');
+                        const isFullscreenIframe = entry.target && entry.target.classList?.contains('tm-fullscreen-chat-iframe');
+
+                        if (isInsideChatIframe || isFullscreenIframe) {
+                            return {
+                                boundingClientRect: entry.boundingClientRect,
+                                intersectionRatio: 1,
+                                intersectionRect: entry.intersectionRect,
+                                isIntersecting: true,
+                                isVisible: true,
+                                rootBounds: entry.rootBounds,
+                                target: entry.target,
+                                time: entry.time
+                            };
+                        }
+                        return entry;
+                    });
+                    callback(modifiedEntries, observer);
+                };
+                super(modifiedCallback, options);
+            }
+        };
+    }
+
     const isIframe = window.self !== window.top;
 
-    // Сверхточные (High Specificity) CSS-селекторы для принудительного переопределения фонов Twitch
-    const chatInnerCSS = `
-        /* Полностью прозрачный фон чата и всех его подложек */
+    // 2. Обход проверки через elementFromPoint (в основном окне)
+    if (!isIframe) {
+        const originalElementFromPoint = document.elementFromPoint;
+        if (typeof originalElementFromPoint === 'function') {
+            document.elementFromPoint = function(x, y) {
+                const element = originalElementFromPoint.apply(this, arguments);
+
+                const iframe = document.querySelector('.tm-fullscreen-chat-iframe');
+                if (iframe) {
+                    const rect = iframe.getBoundingClientRect();
+                    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                        return iframe;
+                    }
+                }
+                return element;
+            };
+        }
+
+        const originalElementsFromPoint = document.elementsFromPoint;
+        if (typeof originalElementsFromPoint === 'function') {
+            document.elementsFromPoint = function(x, y) {
+                const elements = originalElementsFromPoint.apply(this, arguments);
+
+                const iframe = document.querySelector('.tm-fullscreen-chat-iframe');
+                if (iframe) {
+                    const rect = iframe.getBoundingClientRect();
+                    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                        const index = elements.indexOf(iframe);
+                        if (index > -1) {
+                            elements.splice(index, 1);
+                        }
+                        elements.unshift(iframe);
+                    }
+                }
+                return elements;
+            };
+        }
+    }
+
+    // Динамическая генерация CSS-правил в зависимости от текущей прозрачности
+    const getChatInnerCSS = (opacity) => `
+        /* Настраиваемый фон чата и всех его подложек */
         html:root body,
         html:root body .chat-room,
         html:root body .chat-room__content,
@@ -25,18 +97,72 @@
         html:root body .tw-c-background-alt,
         html:root body .tw-c-background-base,
         html:root body .twilight-minimal-root {
-            background: transparent !important;
-            background-color: transparent !important;
+            background: rgba(14, 14, 16, ${opacity}) !important;
+            background-color: rgba(14, 14, 16, ${opacity}) !important;
         }
 
-        /* Полностью скрываем Топ по подаркам / битсам / клипам */
-        html:root body .channel-leaderboard,
-        html:root body .channel-leaderboard-header-rotating,
-        html:root body .channel-leaderboard-header-rotating__container,
-        html:root body .channel-leaderboard-header-rotating-item,
-        html:root body .chat-room__header-leaderboard,
-        html:root body .chat-room__content > div:first-child:not(.chat-list) {
+        /* Скрываем возможные элементы шапки или заголовка в режиме popout */
+        html:root body .popout-chat-header,
+        html:root body [class*="popout-header"] {
             display: none !important;
+        }
+
+        /* === ПОЛНОЕ УДАЛЕНИЕ БЛОКА РЕЙТИНГОВ И ПОДАРКОВ (ТОПЫ, ПОДАРКИ, КЛИПЫ, БИТСЫ) === */
+
+        /* 1. Скрываем все индивидуальные элементы рейтинга и бейджи */
+        html:root body [class*="leaderboard"],
+        html:root body [class*="Leaderboard"],
+        html:root body [class*="subGiftCount"],
+        html:root body [class*="bitsLeaderboardMedal"],
+        html:root body [class*="channelLeaderboardHeaderFirstEntry"],
+        html:root body [class*="channelLeaderboardHeaderRunnerUpEntry"] {
+            display: none !important;
+        }
+
+        /* 2. Схлопываем и скрываем родительские контейнеры любых топов, исключая основной список чата и поле ввода */
+        html:root body div:has([class*="leaderboard"]):not(:has(.chat-list)):not(:has(.chat-input)),
+        html:root body div:has([class*="Leaderboard"]):not(:has(.chat-list)):not(:has(.chat-input)),
+        html:root body div:has([class*="channel-leaderboard"]):not(:has(.chat-list)):not(:has(.chat-input)),
+        html:root body div:has([data-testid*="leaderboard"]):not(:has(.chat-list)):not(:has(.chat-input)) {
+            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: none !important;
+        }
+
+        /* === АГРЕССИВНОЕ СКРЫТИЕ ФОНА ДЛЯ ЗАКРЕПЛЕННЫХ СООБЩЕНИЙ (PINS) === */
+
+        /* Зануляем фон у всех внутренних контейнеров закрепа (включая сами элементы и их pseudo-элементы) */
+        html:root body [class*="pinned-chat"],
+        html:root body [class*="pinned-chat"] *,
+        html:root body [class*="pinned-chat"] *::before,
+        html:root body [class*="pinned-chat"] *::after,
+        html:root body [class*="community-highlight"],
+        html:root body [class*="community-highlight"] *,
+        html:root body [class*="community-highlight"] *::before,
+        html:root body [class*="community-highlight"] *::after,
+        html:root body [data-test-selector="expanded-content"],
+        html:root body [data-test-selector="expanded-content"] *,
+        html:root body [data-test-selector="expanded-content"] *::before,
+        html:root body [data-test-selector="expanded-content"] *::after,
+        html:root body .community-highlight,
+        html:root body .community-highlight * {
+            background: transparent !important;
+            background-color: transparent !important;
+            background-image: none !important;
+        }
+
+        /* Задаем один красивый полупрозрачный темный фон для всей внешней карточки закрепа */
+        html:root body .community-highlight-stack__card,
+        html:root body .community-highlight-stack__card--wide,
+        html:root body .community-highlight-stack__backlog-card {
+            background: rgba(15, 15, 20, 0.7) !important;
+            background-color: rgba(15, 15, 20, 0.7) !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            border-radius: 6px !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
         }
 
         /* Полностью скрываем шапку чата ("Чат трансляции") */
@@ -95,17 +221,27 @@
             opacity: 0.7 !important;
         }
 
-        /* === НАСТРОЙКА СКРЫТИЯ СКРОЛЛБАРА === */
+        /* === НАСТРОЙКА СКРЫТИЯ СКРОЛЛБАРА И ПРЕДОТВРАЩЕНИЯ СДВИГА === */
 
-        /* 1. По умолчанию скрываем скроллбар в Firefox */
+        /* 1. Для Firefox: резервируем фиксированное место (thin), но делаем полосу полностью прозрачной по умолчанию */
         html:root body,
         html:root body *,
         html:root body .chat-list,
         html:root body .simplebar-content-wrapper {
-            scrollbar-width: none !important;
+            scrollbar-width: thin !important;
+            scrollbar-color: transparent transparent !important;
+            transition: scrollbar-color 0.2s ease-in-out !important;
         }
 
-        /* 2. По умолчанию скрываем скроллбар в Chrome / Edge / Brave (Webkit) */
+        /* При наведении в Firefox плавно проявляем бегунок без изменения геометрии (без сдвигов верстки) */
+        html:root body:hover,
+        html:root body:hover *,
+        html:root body:hover .chat-list,
+        html:root body:hover .simplebar-content-wrapper {
+            scrollbar-color: rgba(255, 255, 255, 0.35) transparent !important;
+        }
+
+        /* 2. Для Chrome / Edge / Brave (Webkit): фиксированная ширина 6px (нет сдвигов при появлении) */
         html:root body ::-webkit-scrollbar,
         html:root body *::-webkit-scrollbar {
             width: 6px !important;
@@ -114,41 +250,15 @@
         }
         html:root body ::-webkit-scrollbar-thumb,
         html:root body *::-webkit-scrollbar-thumb {
-            background: transparent !important; /* Невидимый ползунок */
+            background: transparent !important; /* Невидимый ползунок по умолчанию */
             border-radius: 3px !important;
         }
-
-        /* 3. По умолчанию скрываем скроллбар в Simplebar (если остался в системе) */
-        html:root body .simplebar-scrollbar {
-            opacity: 0 !important;
-            transition: opacity 0.25s ease-in-out !important;
-        }
-        html:root body .simplebar-scrollbar::before {
-            background-color: rgba(255, 255, 255, 0.4) !important;
-        }
-
-        /* === ОТОБРАЖЕНИЕ СКРОЛЛБАРА ПРИ НАВЕДЕНИИ МЫШИ НА ЧАТ === */
-
-        /* 1. Для Firefox */
-        html:root body:hover,
-        html:root body:hover *,
-        html:root body:hover .chat-list,
-        html:root body:hover .simplebar-content-wrapper {
-            scrollbar-width: thin !important;
-        }
-
-        /* 2. Для Chrome / Edge / Brave (Webkit) */
         html:root body:hover ::-webkit-scrollbar-thumb,
         html:root body:hover *::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.35) !important; /* Полупрозрачный белый */
+            background: rgba(255, 255, 255, 0.35) !important; /* Полупрозрачный белый при наведении */
         }
 
-        /* 3. Для Simplebar */
-        html:root body:hover .simplebar-scrollbar {
-            opacity: 0.3 !important;
-        }
-
-        /* Черная контурная обводка для текста сообщений, ников, меток времени и системных сообщений */
+        /* Черная контурная обводка для текста сообщений, ников, меток времени, системных и закрепленных сообщений */
         html:root body .chat-line__message,
         html:root body .chat-line__message *,
         html:root body .chat-line__status,
@@ -156,26 +266,47 @@
         html:root body .text-fragment,
         html:root body .mention-fragment,
         html:root body .chat-author__display-name,
-        html:root body .chat-line__timestamp {
+        html:root body .chat-line__timestamp,
+        html:root body .pinned-chat__pinned-by,
+        html:root body .pinned-chat__pinned-by *,
+        html:root body .pinned-chat__message,
+        html:root body .pinned-chat__message * {
             text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0px 0px 2px #000 !important;
         }
     `;
 
-    if (isIframe) {
-        // Если мы внутри iframe чата, внедряем стили напрямую
-        if (window.location.pathname.includes('/chat')) {
-            const style = document.createElement('style');
+    // Функция агрессивного внедрения/удержания стилей в целевом документе
+    const injectStylesToElement = (targetDocument) => {
+        if (!targetDocument) return;
+        const savedOpacity = localStorage.getItem('tm-chat-opacity') || '0';
+        const cssContent = getChatInnerCSS(savedOpacity);
+
+        let style = targetDocument.getElementById('tm-fullscreen-chat-inner-styles');
+        if (!style) {
+            style = targetDocument.createElement('style');
             style.id = 'tm-fullscreen-chat-inner-styles';
-            style.innerHTML = chatInnerCSS;
-            const appendStyles = () => {
-                const target = document.head || document.documentElement;
-                if (target) target.appendChild(style);
-            };
-            if (document.head || document.documentElement) {
-                appendStyles();
-            } else {
-                document.addEventListener('DOMContentLoaded', appendStyles);
+            style.innerHTML = cssContent;
+            const target = targetDocument.head || targetDocument.documentElement;
+            if (target) {
+                target.appendChild(style);
             }
+        } else {
+            if (style.innerHTML !== cssContent) {
+                style.innerHTML = cssContent;
+            }
+            // Перемещаем элемент стилей в самый конец, чтобы он перебивал все остальные
+            if (style.parentNode && style.parentNode.lastChild !== style) {
+                style.parentNode.appendChild(style);
+            }
+        }
+    };
+
+    if (isIframe) {
+        // Если мы внутри iframe чата, постоянно контролируем наличие стилей прозрачности
+        if (window.location.pathname.includes('/chat')) {
+            setInterval(() => {
+                injectStylesToElement(document);
+            }, 500);
         }
         return;
     }
@@ -278,6 +409,43 @@
         }
         .tm-drag-handle:hover {
             color: rgba(255, 255, 255, 0.8) !important;
+        }
+
+        /* Контейнер настроек прозрачности */
+        .tm-settings-wrapper {
+            display: flex !important;
+            align-items: center !important;
+            gap: 4px !important;
+            position: relative !important;
+        }
+
+        /* Кастомный ползунок */
+        .tm-chat-opacity-slider {
+            -webkit-appearance: none !important;
+            width: 60px !important;
+            height: 4px !important;
+            background: rgba(255, 255, 255, 0.2) !important;
+            border-radius: 2px !important;
+            outline: none !important;
+            cursor: pointer !important;
+            margin: 0 4px !important;
+            transition: opacity 0.2s !important;
+        }
+        .tm-chat-opacity-slider::-webkit-slider-thumb {
+            -webkit-appearance: none !important;
+            width: 10px !important;
+            height: 10px !important;
+            border-radius: 50% !important;
+            background: #9146ff !important; /* Twitch Purple */
+            cursor: pointer !important;
+        }
+        .tm-chat-opacity-slider::-moz-range-thumb {
+            width: 10px !important;
+            height: 10px !important;
+            border: none !important;
+            border-radius: 50% !important;
+            background: #9146ff !important;
+            cursor: pointer !important;
         }
 
         /* iframe чата растягивается под панелью управления */
@@ -635,6 +803,10 @@
                             <div class="tm-chat-toolbar">
                                 <button class="tm-chat-btn tm-snap-left">&lt;-</button>
                                 <div class="tm-drag-handle">⠿</div>
+                                <div class="tm-settings-wrapper">
+                                    <input type="range" class="tm-chat-opacity-slider" min="0" max="1" step="0.05" style="display: none;" />
+                                    <button class="tm-chat-btn tm-settings-btn" title="Настройки прозрачности">⚙️</button>
+                                </div>
                                 <button class="tm-chat-btn tm-snap-right">-&gt;</button>
                             </div>
                             <iframe class="tm-fullscreen-chat-iframe"></iframe>
@@ -642,18 +814,16 @@
                         `;
 
                         const iframe = container.querySelector('.tm-fullscreen-chat-iframe');
-                        const parentDomain = window.location.hostname;
-                        iframe.src = `https://www.twitch.tv/embed/${channelName}/chat?parent=${parentDomain}&darkpopout`;
+
+                        // Используем всплывающий чат (/popout/), чтобы расширения (7TV/FFZ/BTTV) воспринимали фрейм как обычный и не запрашивали подтверждение отправки
+                        iframe.src = `https://www.twitch.tv/popout/${channelName}/chat?popout=`;
 
                         // Внедряем стили прозрачности при загрузке
                         iframe.addEventListener('load', () => {
                             try {
                                 const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
                                 if (iframeDoc) {
-                                    const iframeStyle = iframeDoc.createElement('style');
-                                    iframeStyle.id = 'tm-fullscreen-chat-inner-styles';
-                                    iframeStyle.innerHTML = chatInnerCSS;
-                                    iframeDoc.head.appendChild(iframeStyle);
+                                    injectStylesToElement(iframeDoc);
                                 }
                             } catch (e) {
                                 console.error(e);
@@ -673,10 +843,40 @@
                         const bottomHandle = container.querySelector('.tm-resize-bottom');
                         const btnLeft = container.querySelector('.tm-snap-left');
                         const btnRight = container.querySelector('.tm-snap-right');
+                        const settingsBtn = container.querySelector('.tm-settings-btn');
+                        const slider = container.querySelector('.tm-chat-opacity-slider');
 
                         initDrag(container, dragHandle);
                         initResize(container, topHandle, bottomHandle);
                         initSnapping(container, btnLeft, btnRight);
+
+                        // Инициализируем ползунок прозрачности
+                        const savedOpacity = localStorage.getItem('tm-chat-opacity') || '0';
+                        slider.value = savedOpacity;
+
+                        settingsBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            if (slider.style.display === 'none') {
+                                slider.style.display = 'inline-block';
+                            } else {
+                                slider.style.display = 'none';
+                            }
+                        });
+
+                        slider.addEventListener('input', (e) => {
+                            const val = e.target.value;
+                            localStorage.setItem('tm-chat-opacity', val);
+
+                            // Мгновенно обновляем стили в iframe при перемещении ползунка
+                            try {
+                                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                                if (iframeDoc) {
+                                    injectStylesToElement(iframeDoc);
+                                }
+                            } catch (err) {
+                                console.error(err);
+                            }
+                        });
                     }
                 }
             }
