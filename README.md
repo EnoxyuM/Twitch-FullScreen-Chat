@@ -2,6 +2,8 @@
 
 Functional, transparent, movable, resizable etc
 
+27 june 2026 UPD: fixed chat for mods and added transparency scroll. + some other transparency fixes
+
 ## 🚀 Installation
 
 You can install this script directly from GitHub or via Greasy Fork:
@@ -9,7 +11,9 @@ You can install this script directly from GitHub or via Greasy Fork:
 [![Install from Greasy Fork](https://img.shields.io/badge/Install_from-Greasy_Fork-red?style=for-the-badge&logo=greasyfork&logoColor=white)](https://greasyfork.org/scripts/584431)
 [![Direct Install](https://img.shields.io/badge/Install-Direct-green?style=for-the-badge&logo=tampermonkey&logoColor=white)](https://github.com/EnoxyuM/Twitch-FullScreen-Chat/raw/refs/heads/main/Twitch_Fullscreen_Chat.user.js)
 
-https://github.com/user-attachments/assets/bb953479-adbf-4075-be86-0ce1f3b234f4
+https://github.com/user-attachments/assets/3b007bed-a038-4904-b7c1-62bc5315431b
+
+[Streamer in video example (molidae_)](https://www.twitch.tv/molidae_)
 
 ## 💖 Support
 
